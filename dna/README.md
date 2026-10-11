@@ -1,90 +1,74 @@
-# Go DNA Generator - Strict TS Compiler Compatibility
+# DNA — IR → .clone/generated
 
-**Wire-compatible with `compiler/src/generate` outputs.**
+Phase 2 minimal implementation.
 
-This is a modular Go implementation of the ditto.site DNA extraction layer that produces **identical schema and algorithm output** to the existing TypeScript compiler. It is NOT a rewrite—it is an algorithm port of the canonical extraction pipeline.
+This module accepts a hosted IR snapshot from the SBR side and produces output under `.clone/generated/` for downstream consumption.
 
-## Contract
+It is intentionally not a Playwright capture pipeline, and it does not claim TS parity.
 
-### Input
-- Playwright `source/capture/dom-*.json` snapshots (per-viewport DOM tree + computed styles)
-- Optional interaction metadata (`capture/interaction.json`)
+## Input contract
 
-### Output
-- **Directory**: `<out>/<site>/.clone/generated/`
-- **Files** (v1 schema, byte-compatible with TS):
-  - `sections.json` — Sections with role/order/bboxByVp
-  - `tokens.json` — Design tokens (colors/fonts/spacing/...)
-  - `recipes.json` — Layout recipe candidates with confidence/risk
-  - `interaction-recipes.json` — Interactive pattern inventory
-  - `assets.json` — Media resource references ("reference-only" contract)
-  - `fonts.json` — Font family declarations
-  - `seo.json` — SEO metadata
-  - `manifest.json` — Extraction summary
-  - `section-signals.json` — Non-zero signals for mining (search/footer/marquee/bleed)
+The host provides a normalized IR JSON file, e.g.:
 
-## Guarantees
+```bash
+--ir /path/to/.clone/ir.json
+```
 
-✅ **Algorithm fidelity**: LCS-based DOM alignment, section detection, token extraction, recipe detection all migrated from TS source.  
-✅ **Schema fidelity**: JSON output matches `compiler/src/infer/*.ts` and `compiler/src/generate/*.ts` type definitions exactly.  
-✅ **Determinism**: Byte-identical output when given the same capture input (via canonical serialization).  
-✅ **No app generation**: This layer does NOT produce React/Next.js code. That remains in the TS pipeline.
+The file is expected to contain the TS-style IR document structure with:
+- `doc.sourceUrl`
+- `doc.title`
+- `doc.lang`
+- `doc.canonicalViewport`
+- `doc.perViewport`
+- `root` node tree
 
-## Building
+## Output contract
+
+The tool writes to:
+
+```text
+<out>/<site>/.clone/generated/
+```
+
+with, at minimum:
+- `sections.json`
+- `tokens.json`
+- `assets.json`
+- `seo.json`
+- `manifest.json`
+- `recipes.json`
+- `interaction-recipes.json`
+- `fonts.json`
+- `section-signals.json`
+
+## Build
 
 ```bash
 cd dna
-go build -o ../bin/dna ./cmd/dna
+go build ./cmd/dna
+go test ./...
 ```
 
-## Usage
-
-### From existing source capture
+## Run
 
 ```bash
-./bin/dna --source /path/to/source --url https://example.com --out ./output
+./bin/dna --ir ./path/to/ir.json --out ./output
 ```
 
-### With auto-detection
+## Current status
 
-```bash
-./bin/dna --url https://example.com --out ./output
-# (Looks for source in standard layout: runs/example.com/latest/source, etc.)
-```
+Implemented:
+- IR decode
+- section inference
+- token extraction
+- asset extraction
+- SEO extraction
+- file writer
 
-## Verification
+Placeholder-only:
+- recipe detection
+- interaction detection
+- font extraction beyond a minimal body-font pass
+- advanced mining signals (search / marquee / bleed)
 
-After generation, the `.clone/generated/` artifacts are consumed by:
-
-1. **AdaptDitto** (service layer): Loads IR + sections to understand page structure
-2. **Mining** (Notion/Google): Extracts search/footer/marquee signals from `section-signals.json`
-3. **Recipes** (code generation): Uses recipe candidates for component templating
-
-No breaking changes to existing compiler downstream.
-
-## Architecture
-
-```
-dna/
-├── cmd/dna/
-│   └── main.go                 # CLI entry
-├── internal/
-│   ├── ingest/
-│   │   └── loader.go           # Capture loading (dom-*.json, interaction.json)
-│   ├── schema/
-│   │   ├── section.go          # Section type + detection algorithm (from TS)
-│   │   ├── tokens.go           # Token extraction (from TS)
-│   │   ├── recipes.go          # Recipe detection (from TS)
-│   │   ├── interaction.go      # Interaction recipe detection
-│   │   ├── assets.go           # Asset inventory
-│   │   └── seo.go              # SEO extraction
-│   └── pipeline/
-│       └── generator.go        # Orchestration + JSON output
-└── go.mod
-```
-
-Each schema module is a direct port of the corresponding TS file, preserving:
-- Variable naming and constant thresholds
-- Confidence scoring formulas
-- Pattern matching heuristics
-- Responsive regime detection
+This is intentionally a schema-first, buildable foundation for Phase 3 golden validation and downstream integration.

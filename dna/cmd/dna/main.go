@@ -1,114 +1,83 @@
 package main
 
 import (
-	"flag"
-	"fmt"
-	"log"
-	"os"
-	"path/filepath"
-	"strings"
+    "flag"
+    "fmt"
+    "log"
+    "os"
+    "path/filepath"
+    "strings"
+    "time"
 
-	"github.com/rainbowsunday/ditto.site/dna/internal/ingest"
-	"github.com/rainbowsunday/ditto.site/dna/internal/pipeline"
+    "github.com/rainbowsunday/ditto.site/dna/internal/schema"
 )
 
 func main() {
-	url := flag.String("url", "", "Target URL")
-	source := flag.String("source", "", "Source capture directory")
-	out := flag.String("out", "./output", "Output root directory")
-	flag.Parse()
+    irPath := flag.String("ir", "", "Path to the hosted IR snapshot (.clone/ir.json)")
+    outDir := flag.String("out", "./output", "Output root directory")
+    flag.Parse()
 
-	if *url == "" && *source == "" {
-		flag.Usage()
-		log.Fatal("error: --url or --source required")
-	}
+    if *irPath == "" {
+        flag.Usage()
+        log.Fatal("error: --ir is required")
+    }
 
-	// Resolve source directory
-	sourceDir := *source
-	if sourceDir == "" {
-		candidates := []string{
-			filepath.Join(*out, sanitizeHost(*url), ".clone", "source"),
-			filepath.Join("runs", sanitizeHost(*url), "latest", "source"),
-			filepath.Join("runs", sanitizeHost(*url), "source"),
-		}
-		for _, c := range candidates {
-			if _, err := os.Stat(c); err == nil {
-				sourceDir = c
-				break
-			}
-		}
-		if sourceDir == "" {
-			log.Fatal("error: no source capture found; provide --source or run existing compiler capture first")
-		}
-	}
+    b, err := os.ReadFile(*irPath)
+    if err != nil {
+        log.Fatalf("error: read IR file: %v", err)
+    }
 
-	// Verify source exists
-	if _, err := os.Stat(sourceDir); err != nil {
-		log.Fatalf("error: source dir not found: %s", sourceDir)
-	}
+    ir, err := schema.LoadIR(b)
+    if err != nil {
+        log.Fatalf("error: parse IR: %v", err)
+    }
 
-	// Load URL from capture if not provided
-	if *url == "" {
-		capResult, err := ingest.LoadCaptureResult(sourceDir)
-		if err != nil {
-			log.Fatalf("error: load URL from source: %v", err)
-		}
-		*url = capResult.URL
-	}
+    host := strings.TrimPrefix(ir.Doc.SourceURL, "https://")
+    host = strings.TrimPrefix(host, "http://")
+    host = strings.Split(host, "/")[0]
+    host = strings.TrimPrefix(host, "www.")
+    siteName := sanitize(host)
 
-	siteName := sanitizeHost(*url)
-	rootDir := filepath.Join(*out, siteName)
-	cloneDir := filepath.Join(rootDir, ".clone")
+    generated := filepath.Join(*outDir, siteName, ".clone", "generated")
 
-	// Create clone directory
-	if err := os.MkdirAll(cloneDir, 0o755); err != nil {
-		log.Fatalf("error: mkdir %s: %v", cloneDir, err)
-	}
+    sections := schema.DetectSections(ir)
+    tokens := schema.ExtractTokens(ir)
+    assets := schema.ExtractAssets(ir.Root)
+    fonts := schema.ExtractFonts(ir)
+    seo := schema.ExtractSEO(ir)
+    recipes := schema.DetectRecipes(ir, sections)
+    interactions := schema.DetectInteractionRecipes(ir)
+    signals := schema.DetectSignals(sections)
 
-	// Run generator
-	gen := pipeline.NewGenerator(cloneDir, sourceDir, *url)
-	if err := gen.Run(); err != nil {
-		log.Fatalf("error: generate DNA: %v", err)
-	}
+    manifest := map[string]interface{}{
+        "schemaVersion":     1,
+        "compilerVersion":   "0.1.0-go",
+        "sourceUrl":         ir.Doc.SourceURL,
+        "canonicalViewport": ir.Doc.CanonicalViewport,
+        "clonedAt":          time.Now().UTC().Format(time.RFC3339),
+        "sections":          len(sections),
+        "recipes":           len(recipes.Candidates),
+        "assets":            len(assets),
+    }
 
-	fmt.Printf("✓ DNA generated at %s/generated\n", cloneDir)
+    if err := schema.WriteGenerated(generated, sections, tokens, recipes, interactions, assets, fonts, seo, signals, manifest); err != nil {
+        log.Fatalf("error: write generated output: %v", err)
+    }
+
+    fmt.Printf("✓ DNA generated at %s\n", generated)
 }
 
-func sanitizeHost(raw string) string {
-	host := strings.TrimSpace(raw)
-	if host == "" {
-		return "site"
-	}
-
-	if !strings.Contains(host, "://") {
-		host = "https://" + host
-	}
-
-	u := strings.TrimPrefix(host, "https://")
-	u = strings.TrimPrefix(u, "http://")
-	u = strings.TrimSuffix(u, "/")
-	u = strings.TrimSpace(u)
-
-	if u == "" {
-		return "site"
-	}
-
-	parts := strings.Split(u, "/")
-	host = parts[0]
-	host = strings.TrimPrefix(host, "www.")
-	host = strings.ToLower(host)
-
-	for _, r := range host {
-		if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
-			continue
-		}
-		host = strings.ReplaceAll(host, string(r), "-")
-	}
-
-	host = strings.Trim(host, ".-")
-	if host == "" {
-		return "site"
-	}
-
-	return host
+func sanitize(s string) string {
+    s = strings.ToLower(s)
+    s = strings.Map(func(r rune) rune {
+        if (r >= 'a' && r <= 'z') || (r >= '0' && r <= '9') || r == '-' || r == '.' {
+            return r
+        }
+        return '-'
+    }, s)
+    s = strings.Trim(s, ".-")
+    if s == "" {
+        return "site"
+    }
+    return s
 }

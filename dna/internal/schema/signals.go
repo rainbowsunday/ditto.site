@@ -1,29 +1,24 @@
 package schema
 
-// SectionSignals is a lightweight signal inventory for mining/external processing.
-// It marks which sections contain search-relevant, footer, marquee, or full-bleed patterns.
+// SectionSignals is the mining-signal inventory.
 type SectionSignals struct {
-	Search []string `json:"search,omitempty"` // Section IDs with search-like content
-	Footer []string `json:"footer,omitempty"` // Footer-role sections
-	Marquee []string `json:"marquee,omitempty"` // Sections with carousel/ticker patterns
-	Bleed  []string `json:"bleed,omitempty"`   // Full-width sections
+    Footer  []string `json:"footer,omitempty"`
+    Search  []string `json:"search,omitempty"`
+    Marquee []string `json:"marquee,omitempty"`
+    Bleed   []string `json:"bleed,omitempty"`
 }
 
-// DetectSignals builds section signal inventory from sections.
 func DetectSignals(sections []Section) SectionSignals {
-	signals := SectionSignals{
-		Search:  []string{},
-		Footer:  []string{},
-		Marquee: []string{},
-		Bleed:   []string{},
-	}
-
-	for _, s := range sections {
-		if s.Role == "footer" {
-			signals.Footer = append(signals.Footer, s.ID)
-		}
-		// Add more signal detection here as needed
-	}
-
-	return signals
+    out := SectionSignals{
+        Footer:  []string{},
+        Search:  []string{},
+        Marquee: []string{},
+        Bleed:   []string{},
+    }
+    for _, s := range sections {
+        if s.Role == "footer" {
+            out.Footer = append(out.Footer, s.ID)
+        }
+    }
+    return out
 }

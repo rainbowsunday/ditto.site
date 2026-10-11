@@ -1,235 +1,208 @@
 package schema
 
 import (
-	"math"
-	"regexp"
-	"sort"
-	"strings"
+    "fmt"
+    "math"
+    "regexp"
+    "sort"
+    "strings"
 )
 
-// Tokens matches compiler/src/infer/tokens.ts Tokens type.
+// Tokens matches the TS design-token output shape.
 type Tokens struct {
-	Colors      map[string]string `json:"colors"`
-	Fonts       map[string]string `json:"fonts"`
-	FontSizes   map[string]string `json:"fontSizes"`
-	FontWeights map[string]string `json:"fontWeights"`
-	LineHeights map[string]string `json:"lineHeights"`
-	Spacing     map[string]string `json:"spacing"`
-	Radii       map[string]string `json:"radii"`
-	Shadows     map[string]string `json:"shadows"`
-	ZIndices    map[string]string `json:"zIndices"`
-	Breakpoints map[string]string `json:"breakpoints"`
+    Colors      map[string]string `json:"colors"`
+    Fonts       map[string]string `json:"fonts"`
+    FontSizes   map[string]string `json:"fontSizes"`
+    FontWeights map[string]string `json:"fontWeights"`
+    LineHeights map[string]string `json:"lineHeights"`
+    Spacing     map[string]string `json:"spacing"`
+    Radii       map[string]string `json:"radii"`
+    Shadows     map[string]string `json:"shadows"`
+    ZIndices    map[string]string `json:"zIndices"`
+    Breakpoints map[string]string `json:"breakpoints"`
 }
 
-var TRANSPARENT = map[string]bool{
-	"rgba(0, 0, 0, 0)": true,
-	"transparent":      true,
-	"rgba(0,0,0,0)":    true,
+var transparent = map[string]bool{
+    "rgba(0, 0, 0, 0)": true,
+    "transparent":      true,
+    "rgba(0,0,0,0)":    true,
 }
 
-// ExtractTokens extracts design tokens from IR (ported from TS).
-func ExtractTokens(root *IRNode, cw int, perViewport map[int]ViewportInfo, viewports []int) Tokens {
-	colors := make(map[string]int)
-	fonts := make(map[string]int)
-	fontSizes := make(map[string]int)
-	fontWeights := make(map[string]int)
-	lineHeights := make(map[string]int)
-	spacing := make(map[string]int)
-	radii := make(map[string]int)
-	shadows := make(map[string]int)
-	zIndices := make(map[string]int)
+func ExtractTokens(ir *IR) Tokens {
+    cw := ir.Doc.CanonicalViewport
+    colors := map[string]int{}
+    fonts := map[string]int{}
+    fontSizes := map[string]int{}
+    fontWeights := map[string]int{}
+    lineHeights := map[string]int{}
+    spacing := map[string]int{}
+    radii := map[string]int{}
+    shadows := map[string]int{}
+    zIndices := map[string]int{}
 
-	// Traverse and collect
-	visit := func(node *IRNode) {
-		var visitNode func(*IRNode)
-		visitNode = func(n *IRNode) {
-			cs := n.ComputedByVp[cw]
-			if cs != nil && n.VisibleByVp[cw] {
-				if cs["color"] != "" && !TRANSPARENT[cs["color"]] {
-					colors[cs["color"]]++
-				}
-				if cs["backgroundColor"] != "" && !TRANSPARENT[cs["backgroundColor"]] {
-					colors[cs["backgroundColor"]]++
-				}
-				if cs["fontFamily"] != "" {
-					fonts[cs["fontFamily"]]++
-				}
-				if cs["fontSize"] != "" {
-					fontSizes[cs["fontSize"]]++
-				}
-				if cs["fontWeight"] != "" {
-					fontWeights[cs["fontWeight"]]++
-				}
-				if cs["lineHeight"] != "" && cs["lineHeight"] != "normal" {
-					lineHeights[cs["lineHeight"]]++
-				}
+    var visit func(*IRNode)
+    visit = func(node *IRNode) {
+        if computed, ok := node.ComputedByVp[cw]; ok && node.VisibleByVp[cw] {
+            if v := computed["color"]; v != "" && !transparent[v] {
+                colors[v]++
+            }
+            if v := computed["backgroundColor"]; v != "" && !transparent[v] {
+                colors[v]++
+            }
+            if v := computed["fontFamily"]; v != "" {
+                fonts[v]++
+            }
+            if v := computed["fontSize"]; v != "" {
+                fontSizes[v]++
+            }
+            if v := computed["fontWeight"]; v != "" {
+                fontWeights[v]++
+            }
+            if v := computed["lineHeight"]; v != "" && v != "normal" {
+                lineHeights[v]++
+            }
+            for _, p := range []string{"paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "marginTop", "marginBottom", "gap"} {
+                if v := computed[p]; v != "" && v != "0px" && strings.HasSuffix(v, "px") {
+                    spacing[v]++
+                }
+            }
+            for _, p := range []string{"borderTopLeftRadius", "borderTopRightRadius"} {
+                if v := computed[p]; v != "" && v != "0px" {
+                    radii[v]++
+                }
+            }
+            if v := computed["boxShadow"]; v != "" && v != "none" {
+                shadows[v]++
+            }
+            if v := computed["zIndex"]; v != "" && v != "auto" {
+                zIndices[v]++
+            }
+        }
 
-				// Spacing properties
-				for _, prop := range []string{"paddingTop", "paddingBottom", "paddingLeft", "paddingRight", "marginTop", "marginBottom", "gap"} {
-					if v := cs[prop]; v != "" && v != "0px" && strings.HasSuffix(v, "px") {
-						spacing[v]++
-					}
-				}
+        for _, child := range node.Children {
+            if irChild := AsNode(child); irChild != nil {
+                visit(irChild)
+            }
+        }
+    }
+    visit(ir.Root)
 
-				// Border radius
-				for _, prop := range []string{"borderTopLeftRadius", "borderTopRightRadius"} {
-					if v := cs[prop]; v != "" && v != "0px" {
-						radii[v]++
-					}
-				}
+    pv := ir.Doc.PerViewport[cw]
+    pageBg := pv.BodyBg
+    if pageBg == "" || transparent[pageBg] {
+        pageBg = "rgb(255, 255, 255)"
+    }
 
-				if v := cs["boxShadow"]; v != "" && v != "none" {
-					shadows[v]++
-				}
-				if v := cs["zIndex"]; v != "" && v != "auto" {
-					zIndices[v]++
-				}
-			}
+    colorTokens := map[string]string{"--color-bg-page": pageBg}
+    primaryText := pv.BodyColor
+    if primaryText == "" || transparent[primaryText] {
+        if top := topSorted(colors, 1); len(top) > 0 {
+            primaryText = top[0].val
+        }
+    }
+    if primaryText != "" {
+        colorTokens["--color-text-primary"] = primaryText
+    }
 
-			for _, child := range n.Children {
-				if irChild, ok := child.(*IRNode); ok {
-					visitNode(irChild)
-				}
-			}
-		}
-		visitNode(node)
-	}
-	visit(root)
+    usedColors := map[string]bool{pageBg: true, primaryText: true}
+    ci := 1
+    for _, pair := range topSorted(colors, 3) {
+        if usedColors[pair.val] {
+            continue
+        }
+        usedColors[pair.val] = true
+        colorTokens[fmt.Sprintf("--color-%03d", ci)] = pair.val
+        ci++
+    }
 
-	pv := perViewport[cw]
+    fontTokens := map[string]string{}
+    if top := topSorted(fonts, 1); len(top) > 0 {
+        fontTokens["--font-body"] = top[0].val
+    }
+    fi := 1
+    primaryFont := ""
+    if top := topSorted(fonts, 1); len(top) > 0 {
+        primaryFont = top[0].val
+    }
+    for _, pair := range topSorted(fonts, 3) {
+        if pair.val == primaryFont {
+            continue
+        }
+        fontTokens[fmt.Sprintf("--font-%03d", fi)] = pair.val
+        fi++
+    }
 
-	// Build token maps
-	colorTokens := make(map[string]string)
-	pageBg := pv.BodyBg
-	if pageBg == "" || TRANSPARENT[pageBg] {
-		pageBg = "rgb(255, 255, 255)"
-	}
-	colorTokens["--color-bg-page"] = pageBg
+    breakpoints := map[string]string{}
+    for _, vp := range ir.Doc.Viewports {
+        breakpoints[fmt.Sprintf("--bp-%d", vp)] = fmt.Sprintf("%dpx", vp)
+    }
 
-	// Primary text
-	primaryText := pv.BodyColor
-	if primaryText == "" || TRANSPARENT[primaryText] {
-		// Use most frequent color
-		if sorted := topSorted(colors, 1); len(sorted) > 0 {
-			primaryText = sorted[0][0]
-		}
-	}
-	if primaryText != "" {
-		colorTokens["--color-text-primary"] = primaryText
-	}
-
-	usedColors := make(map[string]bool)
-	usedColors[pageBg] = true
-	usedColors[primaryText] = true
-
-	ci := 1
-	for _, pair := range topSorted(colors, 3) {
-		if usedColors[pair[0]] {
-			continue
-		}
-		usedColors[pair[0]] = true
-		colorTokens[pad("--color-", ci)] = pair[0]
-		ci++
-	}
-
-	fontTokens := make(map[string]string)
-	if sorted := topSorted(fonts, 1); len(sorted) > 0 {
-		fontTokens["--font-body"] = sorted[0][0]
-	}
-	fi := 1
-	primaryFont := ""
-	if sorted := topSorted(fonts, 1); len(sorted) > 0 {
-		primaryFont = sorted[0][0]
-	}
-	for _, pair := range topSorted(fonts, 3) {
-		if pair[0] == primaryFont {
-			continue
-		}
-		fontTokens[pad("--font-", fi)] = pair[0]
-		fi++
-	}
-
-	// Breakpoints
-	breakpoints := make(map[string]string)
-	for _, vp := range viewports {
-		breakpoints[pad("--bp-", vp)] = pad("", vp) + "px"
-	}
-
-	return Tokens{
-		Colors:      colorTokens,
-		Fonts:       fontTokens,
-		FontSizes:   numberedByValue(fontSizes, "--font-size"),
-		FontWeights: numberedByValue(fontWeights, "--font-weight"),
-		LineHeights: numberedByFreq(lineHeights, "--line-height"),
-		Spacing:     numberedByValue(spacing, "--space"),
-		Radii:       numberedByValue(radii, "--radius"),
-		Shadows:     numberedByFreq(shadows, "--shadow"),
-		ZIndices:    numberedByValue(zIndices, "--z"),
-		Breakpoints: breakpoints,
-	}
+    return Tokens{
+        Colors:      colorTokens,
+        Fonts:       fontTokens,
+        FontSizes:   numberedByValue(fontSizes, "--font-size"),
+        FontWeights: numberedByValue(fontWeights, "--font-weight"),
+        LineHeights: numberedByFreq(lineHeights, "--line-height"),
+        Spacing:     numberedByValue(spacing, "--space"),
+        Radii:       numberedByValue(radii, "--radius"),
+        Shadows:     numberedByFreq(shadows, "--shadow"),
+        ZIndices:    numberedByValue(zIndices, "--z"),
+        Breakpoints: breakpoints,
+    }
 }
 
-func topSorted(hist map[string]int, minCount int) [][2]string {
-	var pairs [][2]string
-	for v, c := range hist {
-		if c >= minCount {
-			pairs = append(pairs, [2]string{v, ""})
-		}
-	}
-	sort.Slice(pairs, func(i, j int) bool {
-		// Sort by frequency desc, then lexicographically
-		if hist[pairs[i][0]] != hist[pairs[j][0]] {
-			return hist[pairs[i][0]] > hist[pairs[j][0]]
-		}
-		return pairs[i][0] < pairs[j][0]
-	})
-	return pairs
+type histEntry struct {
+    val   string
+    count int
+}
+
+func topSorted(hist map[string]int, min int) []histEntry {
+    out := make([]histEntry, 0)
+    for v, c := range hist {
+        if c >= min {
+            out = append(out, histEntry{val: v, count: c})
+        }
+    }
+    sort.Slice(out, func(i, j int) bool {
+        if out[i].count != out[j].count {
+            return out[i].count > out[j].count
+        }
+        return out[i].val < out[j].val
+    })
+    return out
 }
 
 func numberedByValue(hist map[string]int, prefix string) map[string]string {
-	out := make(map[string]string)
-	pairs := topSorted(hist, 3)
-
-	// Sort by numeric value
-	sort.Slice(pairs, func(i, j int) bool {
-		vi := parsePx(pairs[i][0])
-		vj := parsePx(pairs[j][0])
-		if vi != vj {
-			return vi < vj
-		}
-		return pairs[i][0] < pairs[j][0]
-	})
-
-	for i, pair := range pairs {
-		key := prefix + "-" + pad("", i+1)
-		out[key] = pair[0]
-	}
-	return out
+    pairs := topSorted(hist, 3)
+    sort.Slice(pairs, func(i, j int) bool {
+        ai := parsePx(pairs[i].val)
+        aj := parsePx(pairs[j].val)
+        if ai != aj {
+            return ai < aj
+        }
+        return pairs[i].val < pairs[j].val
+    })
+    out := map[string]string{}
+    for i, p := range pairs {
+        out[fmt.Sprintf("%s-%03d", prefix, i+1)] = p.val
+    }
+    return out
 }
 
 func numberedByFreq(hist map[string]int, prefix string) map[string]string {
-	out := make(map[string]string)
-	for i, pair := range topSorted(hist, 3) {
-		key := prefix + "-" + pad("", i+1)
-		out[key] = pair[0]
-	}
-	return out
+    out := map[string]string{}
+    for i, p := range topSorted(hist, 3) {
+        out[fmt.Sprintf("%s-%03d", prefix, i+1)] = p.val
+    }
+    return out
 }
 
 func parsePx(v string) float64 {
-	re := regexp.MustCompile(`-?\d+(?:\.\d+)?`)
-	match := re.FindString(v)
-	if match == "" {
-		return 0
-	}
-	var f float64
-	fmt.Sscanf(match, "%f", &f)
-	return f
-}
-
-func pad(prefix string, n int) string {
-	if prefix == "" {
-		return fmt.Sprintf("%03d", n)
-	}
-	return fmt.Sprintf("%s%03d", prefix, n)
+    re := regexp.MustCompile(`-?\d+(?:\.\d+)?`)
+    if match := re.FindString(v); match != "" {
+        var f float64
+        _, _ = fmt.Sscanf(match, "%f", &f)
+        return f
+    }
+    return math.NaN()
 }
